@@ -1,21 +1,19 @@
-import { exists, writeFile } from 'fs';
+import { existsSync } from 'fs';
 import { join } from 'path';
-import { promisify } from 'util';
-
-import { juiceFile as juiceFileCb } from 'juice';
-
 import { command, debug, getInput, getVariable, setResult, TaskResult, tool, which } from 'azure-pipelines-task-lib/task';
 import { ToolRunner, IExecOptions } from 'azure-pipelines-task-lib/toolrunner';
-
-const existsAsync = promisify(exists);
-const writeFileAsync = promisify(writeFile);
-const juiceFile = promisify(juiceFileCb);
 
 const BASE_REPORT_PATH = 'webhintresult';
 
 type ReportPaths = {
     source: string;
     destination: string;
+}
+
+/** Converts url to filename created by webhint,
+ *  should really get it from somewhere else */
+const convertUrlToFileName = (url: string): string => {
+    return `${url.replace(/[^a-z]+/g, '-')}`;
 }
 
 /** Returns the URL to analyze provided by the user. */
@@ -31,8 +29,7 @@ const getUrl = (): string => {
 
 /** Returns the user provided working directory or the source directory if none defined. */
 const defineWorkingDirectory = () => {
-    const sourceDirectory = getVariable('build.sourceDirectory') || getVariable('build.sourcesDirectory');
-    const workingDirectory = process.cwd() || sourceDirectory;
+    const workingDirectory = getVariable('System.DefaultWorkingDirectory') || process.cwd();
 
     if (!workingDirectory) {
         throw new Error('Working directory is not defined');
@@ -42,9 +39,12 @@ const defineWorkingDirectory = () => {
 };
 
 /** Returns the paths to the generated HTML report files. */
-const defineOutputReportPaths = (workingDirectory: string): ReportPaths => {
-    const source = join(workingDirectory, BASE_REPORT_PATH, `index.html`);
-    const destination = join(workingDirectory, BASE_REPORT_PATH, `inline.html`);
+const defineOutputReportPaths = (workingDirectory: string, url: string): ReportPaths => {
+    const fileName = convertUrlToFileName(url);
+    const source = join(workingDirectory, BASE_REPORT_PATH, `${fileName}.html`);
+    const destination = join(workingDirectory, BASE_REPORT_PATH, `${fileName}-inline.html`);
+
+    console.debug(`Expected Report Location: ${source}`);
 
     return { destination, source };
 };
@@ -59,7 +59,7 @@ const defineCliArgs = (workingDirectory: string, url: string) => {
     const illegalArgs = [
         '--output=',
         '--formatters',
-        '--tracking'
+        '--telemetry'
     ];
 
     const args = argsStr
@@ -81,7 +81,7 @@ const defineCliArgs = (workingDirectory: string, url: string) => {
     }
 
     args.push('--formatters=html');
-    args.push('--tracking=off');
+    args.push('--telemetry=off');
     args.push(`--output=${join(workingDirectory, BASE_REPORT_PATH)}`);
 
     args.unshift(url);
@@ -99,12 +99,11 @@ const executeWebhint = async (workingDirectory: string, url: string) => {
         'hint.cmd' :
         'hint';
     const localPath = join(process.cwd(), 'node_modules', '.bin', hintExecutable);
-    const installedLocally = await existsAsync(localPath);
     const args = defineCliArgs(workingDirectory, url);
 
     let cmd: ToolRunner;
 
-    if (installedLocally) {
+    if (existsSync(localPath)) {
         debug(`Hint installed locally in: "${localPath}"`);
 
         cmd = tool(localPath);
@@ -145,11 +144,7 @@ const publishHTMLResults = async (reportPaths: ReportPaths) => {
         type: 'webhint_html_result'
     };
 
-    // inline styles using juice
-    const html = await juiceFile(reportPaths.source, {});
-
-    await writeFileAsync(reportPaths.destination, html);
-    command('task.addattachment', properties, reportPaths.destination);
+    command('task.addattachment', properties, reportPaths.source);
 };
 
 const run = async () => {
@@ -160,17 +155,19 @@ const run = async () => {
 
         debug(`WorkingDirectory: ${workingDirectory}`);
 
-        const reportPaths = defineOutputReportPaths(workingDirectory);
-
         // read inputs
         const url = getUrl();
+
+        const reportPaths = defineOutputReportPaths(workingDirectory, url);
 
         debug(`URL: ${url}`);
 
         // execute webhint
         const retCode = await executeWebhint(workingDirectory, url);
 
-        if (!await existsAsync(reportPaths.source)) {
+        console.debug(retCode);
+
+        if (!existsSync(reportPaths.source)) {
             throw new Error(`Webhint did not generate an HTML report. Error code: ${retCode}`);
         }
 

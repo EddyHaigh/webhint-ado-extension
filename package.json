@@ -10,7 +10,7 @@
         "build": "webpack",
         "bump-task": "node scripts/bump-task.js",
         "clean": "rimraf dist",
-        "create-extension": "tfx extension create --rev-version",
+        "create-extension": "tfx extension create --manifest-globs vss-extension.json",
         "package": "npm run clean && npm run bump-task && npm run build && npm run create-extension",
         "publish": "npm run package && tfx extension publish",
         "test": "eslint src --ext ts --report-unused-disable-directives",
